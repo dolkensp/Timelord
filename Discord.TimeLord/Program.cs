@@ -43,6 +43,7 @@ namespace Discord.TimeLord
         public async Task RunAsync(String[] args)
         {
             var countryCodes = TimeZoneNames.TZNames.GetCountryNames("en-GB");
+
             foreach (var countryCode in countryCodes.Keys)
             {
                 var shortcode = $":flag_{countryCode.ToLowerInvariant()}:";
@@ -54,8 +55,8 @@ namespace Discord.TimeLord
 
                     foreach (var timezone in timezoneNames)
                     {
-                        var timezoneInfo = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-                        var abbreviations = TimeZoneNames.TZNames.GetAbbreviationsForTimeZone(timezone, "en-GB");
+                        // var timezoneInfo = TimeZoneInfo.FindSystemTimeZoneById(timezone);
+                        // var abbreviations = TimeZoneNames.TZNames.GetAbbreviationsForTimeZone(timezone, "en-GB");
                     }
                 }
             }
@@ -65,6 +66,8 @@ namespace Discord.TimeLord
                 this._discord.Connected += Discord_OnConnectedAsync;
                 this._discord.MessageReceived += Discord_OnMessageReceivedAsync;
                 this._discord.ReactionAdded += Discord_OnReactionAddedAsync;
+                this._discord.ReactionsCleared += Discord_OnReactionsClearedAsync;
+                this._discord.ReactionRemoved += Discord_OnReactionRemovedAsync;
 
                 await this._discord.LoginAsync(TokenType.Bot, ConfigurationManager.AppSettings["Token.Bot"]);
 
@@ -74,11 +77,34 @@ namespace Discord.TimeLord
             }
         }
 
-        private async Task Discord_OnReactionAddedAsync(Cacheable<IUserMessage, UInt64> cachedMessage, ISocketMessageChannel channel, SocketReaction reaction)
+        private async Task Discord_OnReactionRemovedAsync(Cacheable<IUserMessage, UInt64> cachedMessage, ISocketMessageChannel channel, SocketReaction reaction)
         {
+            // Ignore bots
+            if (reaction.User.IsSpecified && reaction.User.Value.IsBot) return;
+
             var message = await cachedMessage.GetOrDownloadAsync();
 
+            if (message.Author.Id == this._discord.CurrentUser.Id)
+            {
+
+            }
+
+            await Task.CompletedTask;
+        }
+
+        private async Task Discord_OnReactionsClearedAsync(Cacheable<IUserMessage, UInt64> cachedMessage, ISocketMessageChannel channel)
+        {
+            await Task.CompletedTask;
+        }
+
+        private async Task Discord_OnReactionAddedAsync(Cacheable<IUserMessage, UInt64> cachedMessage, ISocketMessageChannel channel, SocketReaction reaction)
+        {
+            if (!reaction.User.IsSpecified) return;
+
+            // Ignore bots
             if (reaction.User.IsSpecified && reaction.User.Value.IsBot) return;
+
+            var message = await cachedMessage.GetOrDownloadAsync();
 
             if (reaction.Emote.Name == EmojiLibrary.DELETE.Name)
             {
@@ -87,22 +113,21 @@ namespace Discord.TimeLord
                     await message.DeleteAsync();
                 }
             }
-
-            if (message.Author.Id == this._discord.CurrentUser.Id)
+            else if (message.Author.Id == this._discord.CurrentUser.Id)
             {
                 var shortcode = EmojiOne.EmojiOne.ToShort(reaction.Emote.Name);
                 var timeZones = TimeZoneNames.TZNames.GetTimeZoneIdsForCountry(shortcode.Substring(6, 2), DateTimeOffset.UtcNow);
                 var zones = SECONDARY_ZONES.Where(z => reaction.Emote.Name == z.Name);
 
-                await message.ModifyAsync((Action<MessageProperties>)((mp) =>
+                await message.ModifyAsync((mp) =>
                 {
                     var embed = message.Embeds.FirstOrDefault();
-                    var author = embed.Author.Value;
-                    var footer = embed.Footer.Value;
+                    var embedAuthor = embed.Author.Value;
+                    var embedFooter = embed.Footer.Value;
 
                     var fields = new List<EmbedFieldBuilder>(embed.Fields.Select(f => new EmbedFieldBuilder { Name = f.Name, Value = f.Value, IsInline = f.Inline }));
 
-                    zones = Enumerable.Where<Emoji>(zones, (Func<Emoji, bool>)(z => (bool)!fields.Where((Func<EmbedFieldBuilder, bool>)(f => (bool)(f.Name == z.Name))).Any()));
+                    zones = zones.Where(z => !fields.Where(f => f.Name == z.Name).Any());
 
                     foreach (var zone in zones)
                     {
@@ -113,30 +138,36 @@ namespace Discord.TimeLord
                     {
                         Author = new EmbedAuthorBuilder
                         {
-                            IconUrl = author.IconUrl,
-                            Name = author.Name,
-                            Url = author.Url,
+                            IconUrl = embedAuthor.IconUrl,
+                            Name = embedAuthor.Name,
+                            Url = embedAuthor.Url,
                         },
                         Color = embed.Color,
                         Description = embed.Description,
                         Fields = fields,
                         Footer = new EmbedFooterBuilder
                         {
-                            IconUrl = footer.IconUrl,
-                            Text = footer.Text,
+                            IconUrl = embedFooter.IconUrl,
+                            Text = embedFooter.Text,
                         },
                         Timestamp = embed.Timestamp,
                         Title = embed.Title,
                         Url = embed.Url,
-                    });
-                }));
+                    }.Build());
+                });
+
+                await message.RemoveReactionAsync(reaction.Emote, reaction.User.Value);
             }
             else
             {
-                // TODO: New Embed
-            }
+                var author = message.Author as IGuildUser;
 
-            Console.WriteLine(reaction.Emote.Name);
+                var response = await this.RespondToAsync(message, author);
+
+                await message.DeleteAsync();
+
+                await this.ReactToAsync(response);
+            }
         }
 
         private IEnumerable<DateTime> ExtractDates(String content, TimeZoneInfo defaultTimeZone)
@@ -182,65 +213,33 @@ namespace Discord.TimeLord
             return TimeZoneInfo.Local;
         }
 
-        private async Task Discord_OnMessageReceivedAsync(SocketMessage arg)
+        private async Task Discord_OnMessageReceivedAsync(SocketMessage socketMessage)
         {
-            if (arg.Author.IsBot) return;
-            if (arg.Author.Id == this._discord.CurrentUser.Id) return;
-            if (!arg.Content.Contains("GMT")) return;
+            if (socketMessage.Author.IsBot) return;
+            if (socketMessage.Author.Id == this._discord.CurrentUser.Id) return;
+            if (!socketMessage.Content.Contains("GMT")) return;
             // if (arg.Channel.Id != 266427401305587712UL) return;
 
-            var message = arg as IUserMessage;
-            var author = arg as IGuildUser;
+            var message = socketMessage as IUserMessage;
+            var author = socketMessage.Author as IGuildUser;
 
             var nickname = author.Nickname ?? author.Username;
             if (String.IsNullOrWhiteSpace(nickname)) nickname = author.Username;
 
             var defaultTimeZone = this.ExtractTimeZone(nickname, TimeZoneInfo.Utc);
 
-            var mentionedDates = this.ExtractDates(arg.Content, TimeZoneInfo.Utc).Distinct().ToArray();
-            var mentionedTimes = this.ExtractTimes(arg.Content, TimeZoneInfo.Utc).Distinct().ToArray();
+            var mentionedDates = this.ExtractDates(socketMessage.Content, TimeZoneInfo.Utc).Distinct().ToArray();
+            var mentionedTimes = this.ExtractTimes(socketMessage.Content, TimeZoneInfo.Utc).Distinct().ToArray();
 
             if (mentionedDates.Any() || mentionedTimes.Any())
             {
-                if (arg.MentionedUsers.Where(u => u.Id == this._discord.CurrentUser.Id).Any())
+                if (socketMessage.MentionedUsers.Where(u => u.Id == this._discord.CurrentUser.Id).Any())
                 {
-                    var fields = new List<EmbedFieldBuilder> { };
-
-                    foreach (var zone in PRIMARY_ZONES)
-                    {
-                        fields.Add(new EmbedFieldBuilder { Name = $"{zone.Name}", Value = "1700" });
-                    }
-
-                    var response = await arg.Channel.SendMessageAsync(String.Empty, false, new EmbedBuilder
-                    {
-                        Author = new EmbedAuthorBuilder
-                        {
-                            IconUrl = arg.Author.GetAvatarUrl(ImageFormat.Auto, 128),
-                            Name = (arg.Author as SocketGuildUser)?.Nickname ?? arg.Author.Username,
-                        },
-                        Description = message.Content,
-                        Color = new HSLColor
-                        {
-                            Hue = (arg.Author.Id) % 240,
-                            Saturation = ((arg.Author.Id / 240f) % 30) * 2 + 90,
-                            Luminosity = ((arg.Author.Id / 7200f) % 30) * 2 + 90,
-                        },
-                        Timestamp = DateTime.Now.AddDays(5).AddHours(5),
-                        Footer = new EmbedFooterBuilder
-                        {
-                            Text = $"{message.Id}",
-                        },
-                        Fields = fields,
-                    });
+                    var response = await this.RespondToAsync(message, author);
 
                     await message.DeleteAsync();
 
-                    await response.AddReactionAsync(EmojiLibrary.DELETE);
-
-                    foreach (var zone in SECONDARY_ZONES)
-                    {
-                        await response.AddReactionAsync(zone);
-                    }
+                    await this.ReactToAsync(response);
                 }
                 else
                 {
@@ -250,6 +249,50 @@ namespace Discord.TimeLord
                     }
                 }
             }
+        }
+
+        private async Task ReactToAsync(IUserMessage response)
+        {
+            await response.AddReactionAsync(EmojiLibrary.DELETE);
+
+            foreach (var zone in SECONDARY_ZONES)
+            {
+                await response.AddReactionAsync(zone);
+            }
+        }
+
+        private async Task<IUserMessage> RespondToAsync(IUserMessage message, IGuildUser author)
+        {
+            var fields = new List<EmbedFieldBuilder> { };
+
+            foreach (var zone in PRIMARY_ZONES)
+            {
+                fields.Add(new EmbedFieldBuilder { Name = $"{zone.Name}", Value = "1700" });
+            }
+
+            var response = await message.Channel.SendMessageAsync(String.Empty, false, new EmbedBuilder
+            {
+                Author = new EmbedAuthorBuilder
+                {
+                    IconUrl = author.GetAvatarUrl(ImageFormat.Auto, 128),
+                    Name = author.Nickname ?? author.Username,
+                },
+                Description = message.Content,
+                Color = new HSLColor
+                {
+                    Hue = (author.Id) % 240,
+                    Saturation = ((author.Id / 240f) % 30) * 2 + 90,
+                    Luminosity = ((author.Id / 7200f) % 30) * 2 + 90,
+                },
+                Timestamp = DateTime.Now.AddDays(5).AddHours(5),
+                Footer = new EmbedFooterBuilder
+                {
+                    Text = $"{message.Id}",
+                },
+                Fields = fields,
+            }.Build());
+
+            return response;
         }
 
         private async Task Discord_OnConnectedAsync()

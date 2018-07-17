@@ -6,13 +6,18 @@
     <OutputType>Exe</OutputType>
     <StartupObject>Discord.TimeLord.Program</StartupObject>
   </PropertyGroup>
+  
+  <PropertyGroup>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Discord.Net" Version="1.0.1" />
-    <PackageReference Include="EmojiOne" Version="2.2.7" />
-    <PackageReference Include="Newtonsoft.Json" Version="10.0.2" />
-    <PackageReference Include="NodaTime" Version="2.2.0" />
-    <PackageReference Include="TimeZoneNames" Version="2.1.0" />
+    <PackageReference Include="Discord.Net" Version="2.0.0-beta2-00975" />
+    <PackageReference Include="EmojiOne" Version="2.2.7.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="11.0.2" />
+    <PackageReference Include="NodaTime" Version="2.3.0" />
+    <PackageReference Include="System.Net.Http" Version="4.3.3" />
+    <PackageReference Include="TimeZoneNames" Version="3.3.2" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,6 +26,12 @@
 
   <ItemGroup>
     <Reference Include="System.Configuration" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="private-appSettings.config">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
